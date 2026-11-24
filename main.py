@@ -25,30 +25,64 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
+def candidate_dirs():
+    """Layered output dirs: MAKEFUN_OUTPUT_DIR, then /output, then cwd.
+
+    Duplicates are dropped so each directory is only tried once.
+    """
+    seen = set()
+    dirs = []
+    env_dir = os.environ.get("MAKEFUN_OUTPUT_DIR")
+    for raw in (env_dir, "/output", str(Path.cwd())):
+        if not raw:
+            continue
+        key = os.path.normpath(raw)
+        if key not in seen:
+            seen.add(key)
+            dirs.append(Path(raw))
+    return dirs
+
+
 def main():
-    wanted = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
+    if not SRC.is_file():
+        print("error: source entry.png is missing: %s" % SRC,
+              file=sys.stderr)
+        print("error: cannot produce entry.png without the source image",
+              file=sys.stderr)
+        return 1
+    tried = []
     dest = None
-    for candidate in (Path(wanted), Path.cwd()):
+    for candidate in candidate_dirs():
         try:
             candidate.mkdir(parents=True, exist_ok=True)
             target = candidate / "entry.png"
             shutil.copyfile(SRC, target)
             dest = target
             break
-        except OSError:
+        except OSError as exc:
+            tried.append("%s (%s)" % (candidate, exc))
             continue
     if dest is None:
         print("error: could not write entry.png to any output dir",
               file=sys.stderr)
+        print("error: tried: %s" % "; ".join(tried), file=sys.stderr)
         return 1
-    if dest.stat().st_size != SRC.stat().st_size:
-        print("error: size mismatch after copy", file=sys.stderr)
+    expected_size = SRC.stat().st_size
+    expected_sha = sha256_of(SRC)
+    actual_size = dest.stat().st_size
+    if actual_size != expected_size:
+        print("error: size mismatch after copy to %s: got %d bytes, "
+              "expected %d bytes" % (dest, actual_size, expected_size),
+              file=sys.stderr)
         return 1
-    if sha256_of(dest) != sha256_of(SRC):
-        print("error: sha256 mismatch after copy", file=sys.stderr)
+    actual_sha = sha256_of(dest)
+    if actual_sha != expected_sha:
+        print("error: sha256 mismatch after copy to %s: got %s, "
+              "expected %s" % (dest, actual_sha, expected_sha),
+              file=sys.stderr)
         return 1
     print("OK entry.png -> %s (%d bytes, sha256=%s)"
-          % (dest, dest.stat().st_size, sha256_of(dest)))
+          % (dest, actual_size, actual_sha))
     return 0
 
 
